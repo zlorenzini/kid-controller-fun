@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kid Controller Fun 🎮</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      color: #fff;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+      position: fixed;
+      top: 0; left: 0;
+    }
+
+    /* ── Overlay shown before controller is connected ── */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,.82);
+      z-index: 10;
+      gap: 1.4rem;
+      transition: opacity .5s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+
+    #overlay h1 {
+      font-size: clamp(2rem, 6vw, 4rem);
+      font-weight: 900;
+      background: linear-gradient(135deg, #ff6ec7, #ffd166, #06d6a0, #118ab2);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      padding: 0 1rem;
+    }
+    #overlay p {
+      font-size: clamp(1rem, 3vw, 1.5rem);
+      opacity: .85;
+      text-align: center;
+      padding: 0 2rem;
+      line-height: 1.6;
+    }
+    #overlay .icon { font-size: clamp(3rem, 10vw, 6rem); animation: bounce 1.2s infinite; }
+    @keyframes bounce {
+      0%,100% { transform: translateY(0); }
+      50%      { transform: translateY(-18px); }
+    }
+
+    /* ── HUD: button grid at bottom ── */
+    #hud {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+      z-index: 5;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 98vw;
+    }
+    .btn-pill {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      background: rgba(255,255,255,.12);
+      border: 2px solid rgba(255,255,255,.2);
+      transition: background .08s, border-color .08s, transform .08s;
+      white-space: nowrap;
+    }
+    .btn-pill.active {
+      background: var(--col);
+      border-color: var(--col);
+      transform: scale(1.18);
+      box-shadow: 0 0 10px var(--col);
+    }
+
+    /* ── Effect label that pops up briefly ── */
+    #fx-label {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: clamp(1.4rem, 4vw, 2.6rem);
+      font-weight: 900;
+      pointer-events: none;
+      z-index: 6;
+      opacity: 0;
+      transition: opacity .15s;
+      text-shadow: 0 0 20px currentColor;
+    }
+    #fx-label.show { opacity: 1; }
+
+    /* ── Stick indicators ── */
+    #sticks {
+      position: fixed;
+      bottom: 68px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 32px;
+      z-index: 5;
+    }
+    .stick-ring {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.3);
+      position: relative;
+      background: rgba(255,255,255,.06);
+    }
+    .stick-dot {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      transition: top .05s, left .05s;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Canvas for all graphics -->
+<canvas id="c"></canvas>
+
+<!-- Welcome overlay -->
+<div id="overlay">
+  <div class="icon">🎮</div>
+  <h1>Kid Controller Fun!</h1>
+  <p>Plug in your <strong>Nintendo Switch Pro Controller</strong> via USB,<br/>
+     then press any button to start the show!</p>
+  <p style="font-size:.9rem; opacity:.55;">(Works best in Chrome / Edge on desktop)</p>
+</div>
+
+<!-- Stick visualisers -->
+<div id="sticks">
+  <div class="stick-ring" id="ls"><div class="stick-dot" id="ls-dot"></div></div>
+  <div class="stick-ring" id="rs"><div class="stick-dot" id="rs-dot"></div></div>
+</div>
+
+<!-- Button HUD -->
+<div id="hud"></div>
+
+<!-- Effect label -->
+<div id="fx-label"></div>
+
+<script>
+/* =========================================================
+   KID CONTROLLER FUN  – main script
+   Gamepad button mapping for Nintendo Switch Pro Controller
+   (standard layout as reported by most browsers):
+     0=B  1=A  2=Y  3=X
+     4=L  5=R  6=ZL 7=ZR
+     8=-  9=+  10=LS 11=RS
+     12=Up 13=Down 14=Left 15=Right
+     16=Home 17=Capture
+   Axes: 0=LSx 1=LSy 2=RSx 3=RSy
+========================================================= */
+
+const canvas   = document.getElementById('c');
+const ctx      = canvas.getContext('2d');
+const overlay  = document.getElementById('overlay');
+const fxLabel  = document.getElementById('fx-label');
+const lsDot    = document.getElementById('ls-dot');
+const rsDot    = document.getElementById('rs-dot');
+const hud      = document.getElementById('hud');
+
+// ── Resize ──────────────────────────────────────────────
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Button meta ─────────────────────────────────────────
+const BUTTONS = [
+  { label:'B',  color:'#ef476f' },
+  { label:'A',  color:'#ffd166' },
+  { label:'Y',  color:'#06d6a0' },
+  { label:'X',  color:'#118ab2' },
+  { label:'L',  color:'#9b5de5' },
+  { label:'R',  color:'#f15bb5' },
+  { label:'ZL', color:'#00bbf9' },
+  { label:'ZR', color:'#00f5d4' },
+  { label:'−',  color:'#aaa' },
+  { label:'+',  color:'#aaa' },
+  { label:'LS', color:'#ccc' },
+  { label:'RS', color:'#ccc' },
+  { label:'▲',  color:'#fff' },
+  { label:'▼',  color:'#fff' },
+  { label:'◄',  color:'#fff' },
+  { label:'►',  color:'#fff' },
+  { label:'⌂',  color:'#ffd166' },
+  { label:'⏺',  color:'#06d6a0' },
+];
+
+// Build HUD pills
+const pills = BUTTONS.map((b, i) => {
+  const el = document.createElement('div');
+  el.className = 'btn-pill';
+  el.id = `btn-${i}`;
+  el.style.setProperty('--col', b.color);
+  el.textContent = b.label;
+  hud.appendChild(el);
+  return el;
+});
+
+// ── Particle system ──────────────────────────────────────
+const particles = [];
+
+function spawnParticles(x, y, color, count = 60, speed = 8, size = 8) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const s     = (0.4 + Math.random() * 0.6) * speed;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * s,
+      vy: Math.sin(angle) * s,
+      life: 1,
+      decay: 0.012 + Math.random() * 0.02,
+      size: (0.5 + Math.random()) * size,
+      color,
+      shape: Math.random() < 0.5 ? 'circle' : 'star',
+    });
+  }
+}
+
+function spawnTrail(x, y, hue) {
+  const color = `hsl(${hue},100%,60%)`;
+  particles.push({
+    x, y,
+    vx: (Math.random() - 0.5) * 1.5,
+    vy: (Math.random() - 0.5) * 1.5,
+    life: 0.7,
+    decay: 0.04 + Math.random() * 0.03,
+    size: 4 + Math.random() * 6,
+    color,
+    shape: 'circle',
+  });
+}
+
+// Ripple effect
+const ripples = [];
+function spawnRipple(x, y, color) {
+  ripples.push({ x, y, r: 10, maxR: Math.max(canvas.width, canvas.height) * 0.45, color, alpha: 0.9 });
+}
+
+// Star burst
+function spawnStars(x, y, color, n = 12) {
+  for (let i = 0; i < n; i++) {
+    const angle = (i / n) * Math.PI * 2;
+    const len   = 40 + Math.random() * 80;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * (len / 20),
+      vy: Math.sin(angle) * (len / 20),
+      life: 1,
+      decay: 0.015,
+      size: 6 + Math.random() * 8,
+      color,
+      shape: 'star',
+    });
+  }
+}
+
+// Spiral
+const spirals = [];
+function spawnSpiral(x, y) {
+  spirals.push({ x, y, angle: 0, life: 1, radius: 0, hue: Math.random() * 360 });
+}
+
+// ── Background state ────────────────────────────────────
+let bgHue  = 220;
+let bgHue2 = 280;
+
+// ── Wand (left stick cursor) ─────────────────────────────
+const wand = { x: 0, y: 0 };
+let wandHue = 0;
+
+// ── Controller state ─────────────────────────────────────
+let connected    = false;
+let prevButtons  = new Array(18).fill(false);
+
+// ── Show effect label ────────────────────────────────────
+let fxTimeout = null;
+function showLabel(text, color) {
+  fxLabel.textContent = text;
+  fxLabel.style.color = color;
+  fxLabel.classList.add('show');
+  clearTimeout(fxTimeout);
+  fxTimeout = setTimeout(() => fxLabel.classList.remove('show'), 1200);
+}
+
+// ── Draw a star shape ────────────────────────────────────
+function drawStar(cx, cy, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const angle = (i * Math.PI) / 5 - Math.PI / 2;
+    const rad   = i % 2 === 0 ? r : r * 0.45;
+    ctx[i === 0 ? 'moveTo' : 'lineTo'](cx + Math.cos(angle)*rad, cy + Math.sin(angle)*rad);
+  }
+  ctx.closePath();
+}
+
+// ── Handle a newly-pressed button ───────────────────────
+function onButtonDown(idx) {
+  const cx = canvas.width  / 2;
+  const cy = canvas.height / 2;
+  const wx = wand.x || cx;
+  const wy = wand.y || cy;
+
+  switch (idx) {
+    case 1: // A – yellow explosion
+      spawnParticles(wx, wy, BUTTONS[1].color, 80, 12, 10);
+      showLabel('A ✨', BUTTONS[1].color);
+      break;
+    case 0: // B – red ripple
+      spawnRipple(wx, wy, BUTTONS[0].color);
+      showLabel('B 🌊', BUTTONS[0].color);
+      break;
+    case 3: // X – blue stars
+      spawnStars(wx, wy, BUTTONS[3].color, 16);
+      showLabel('X ⭐', BUTTONS[3].color);
+      break;
+    case 2: // Y – rainbow spiral
+      spawnSpiral(wx, wy);
+      showLabel('Y 🌈', BUTTONS[2].color);
+      break;
+    case 4: case 5: // L / R – pink/purple shower
+      for (let i = 0; i < 5; i++) {
+        const bx = Math.random() * canvas.width;
+        spawnParticles(bx, 0, idx === 4 ? BUTTONS[4].color : BUTTONS[5].color, 30, 7, 7);
+      }
+      showLabel(idx === 4 ? 'L 🌸' : 'R 🌺', BUTTONS[idx].color);
+      break;
+    case 6: case 7: // ZL / ZR – full-screen flash
+      spawnParticles(cx, cy, BUTTONS[idx].color, 120, 15, 12);
+      showLabel(idx === 6 ? 'ZL 💥' : 'ZR 💥', BUTTONS[idx].color);
+      break;
+    case 12: spawnParticles(wx, wy - 60, '#fff', 40, 10, 8); showLabel('UP ↑','#fff'); break;
+    case 13: spawnParticles(wx, wy + 60, '#fff', 40, 10, 8); showLabel('DOWN ↓','#fff'); break;
+    case 14: spawnParticles(wx - 60, wy, '#fff', 40, 10, 8); showLabel('LEFT ←','#fff'); break;
+    case 15: spawnParticles(wx + 60, wy, '#fff', 40, 10, 8); showLabel('RIGHT →','#fff'); break;
+    case 9: // + button – fireworks show
+      for (let i = 0; i < 8; i++) {
+        setTimeout(() => {
+          const rx = canvas.width  * (.15 + Math.random() * .7);
+          const ry = canvas.height * (.15 + Math.random() * .5);
+          const hue = Math.random() * 360;
+          spawnParticles(rx, ry, `hsl(${hue},100%,65%)`, 80, 11, 9);
+        }, i * 120);
+      }
+      showLabel('+ 🎆 FIREWORKS!', '#ffd166');
+      break;
+    case 8: // − button – clear screen gently
+      showLabel('− 🧹', '#aaa');
+      break;
+    default: break;
+  }
+}
+
+// ── Main game loop ───────────────────────────────────────
+let lastTime = 0;
+
+function loop(ts) {
+  const dt = Math.min((ts - lastTime) / 16.67, 3); // normalise to 60fps
+  lastTime = ts;
+
+  // Read gamepad
+  const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const g of gamepads) { if (g) { gp = g; break; } }
+
+  if (gp) {
+    if (!connected) {
+      connected = true;
+      overlay.classList.add('hidden');
+    }
+
+    // Axes
+    const lx = Math.abs(gp.axes[0]) > 0.12 ? gp.axes[0] : 0;
+    const ly = Math.abs(gp.axes[1]) > 0.12 ? gp.axes[1] : 0;
+    const rx = gp.axes[2] !== undefined ? (Math.abs(gp.axes[2]) > 0.12 ? gp.axes[2] : 0) : 0;
+    const ry = gp.axes[3] !== undefined ? (Math.abs(gp.axes[3]) > 0.12 ? gp.axes[3] : 0) : 0;
+
+    // Move wand with left stick
+    const speed = 6 * dt;
+    wand.x = Math.max(0, Math.min(canvas.width,  (wand.x || canvas.width/2)  + lx * speed * 3));
+    wand.y = Math.max(0, Math.min(canvas.height, (wand.y || canvas.height/2) + ly * speed * 3));
+
+    // Trail when stick is moving
+    if (Math.abs(lx) > 0.1 || Math.abs(ly) > 0.1) {
+      wandHue = (wandHue + 2) % 360;
+      spawnTrail(wand.x, wand.y, wandHue);
+    }
+
+    // Right stick shifts background hue
+    bgHue  = (bgHue  + rx * 1.5 * dt) % 360;
+    bgHue2 = (bgHue2 + ry * 1.5 * dt) % 360;
+
+    // Update stick dots
+    const stickRange = 19; // px from centre
+    lsDot.style.left = `${50 + lx * stickRange}%`;
+    lsDot.style.top  = `${50 + ly * stickRange}%`;
+    rsDot.style.left = `${50 + rx * stickRange}%`;
+    rsDot.style.top  = `${50 + ry * stickRange}%`;
+
+    // Buttons
+    for (let i = 0; i < Math.min(gp.buttons.length, BUTTONS.length); i++) {
+      const pressed = gp.buttons[i].pressed;
+      if (pressed && !prevButtons[i]) onButtonDown(i);
+      prevButtons[i] = pressed;
+
+      if (pills[i]) {
+        if (pressed) pills[i].classList.add('active');
+        else         pills[i].classList.remove('active');
+      }
+    }
+  } else {
+    connected = false;
+  }
+
+  // ── Draw background ──────────────────────────────────
+  bgHue  = (bgHue  + 0.12 * dt) % 360;
+  bgHue2 = (bgHue2 + 0.08 * dt) % 360;
+
+  const grad = ctx.createRadialGradient(
+    canvas.width * .35, canvas.height * .35, 0,
+    canvas.width * .5,  canvas.height * .5,  Math.max(canvas.width, canvas.height) * .8
+  );
+  grad.addColorStop(0,   `hsl(${bgHue},70%,8%)`);
+  grad.addColorStop(0.5, `hsl(${(bgHue+60)%360},60%,6%)`);
+  grad.addColorStop(1,   `hsl(${bgHue2},80%,5%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // ── Draw ripples ─────────────────────────────────────
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const rp = ripples[i];
+    rp.r    += 8 * dt;
+    rp.alpha = 0.9 * (1 - rp.r / rp.maxR);
+    if (rp.alpha <= 0.01) { ripples.splice(i, 1); continue; }
+    ctx.save();
+    ctx.strokeStyle = rp.color;
+    ctx.lineWidth   = 3;
+    ctx.globalAlpha = rp.alpha;
+    ctx.beginPath();
+    ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Draw spirals ──────────────────────────────────────
+  for (let i = spirals.length - 1; i >= 0; i--) {
+    const sp = spirals[i];
+    sp.angle  += 0.35 * dt;
+    sp.radius += 3 * dt;
+    sp.life   -= 0.006 * dt;
+    if (sp.life <= 0) { spirals.splice(i, 1); continue; }
+    for (let k = 0; k < 6; k++) {
+      const a   = sp.angle + (k / 6) * Math.PI * 2;
+      const hue = (sp.hue + k * 60) % 360;
+      const px  = sp.x + Math.cos(a) * sp.radius;
+      const py  = sp.y + Math.sin(a) * sp.radius;
+      ctx.save();
+      ctx.globalAlpha = sp.life;
+      ctx.fillStyle   = `hsl(${hue},100%,65%)`;
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ── Draw particles ────────────────────────────────────
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x    += p.vx * dt;
+    p.y    += p.vy * dt;
+    p.vy   += 0.18 * dt; // gravity
+    p.life -= p.decay * dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+
+    ctx.save();
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle   = p.color;
+    if (p.shape === 'star') {
+      drawStar(p.x, p.y, p.size);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ── Draw wand cursor ─────────────────────────────────
+  if (connected) {
+    const wx = wand.x;
+    const wy = wand.y;
+    const cg  = ctx.createRadialGradient(wx, wy, 0, wx, wy, 22);
+    cg.addColorStop(0,   `hsla(${wandHue},100%,80%,0.9)`);
+    cg.addColorStop(0.5, `hsla(${wandHue},100%,60%,0.5)`);
+    cg.addColorStop(1,   `hsla(${wandHue},100%,50%,0)`);
+    ctx.save();
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.arc(wx, wy, 22, 0, Math.PI * 2);
+    ctx.fill();
+    // small bright core
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(wx, wy, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    wandHue = (wandHue + 0.5) % 360;
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ── Gamepad connect/disconnect events ───────────────────
+window.addEventListener('gamepadconnected', (e) => {
+  console.log('Gamepad connected:', e.gamepad.id);
+  overlay.classList.add('hidden');
+  connected = true;
+  // Initialise wand to centre
+  wand.x = canvas.width  / 2;
+  wand.y = canvas.height / 2;
+});
+window.addEventListener('gamepaddisconnected', () => {
+  connected = false;
+  overlay.classList.remove('hidden');
+  pills.forEach(p => p.classList.remove('active'));
+});
+
+// Initialise wand position
+wand.x = canvas.width  / 2;
+wand.y = canvas.height / 2;
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
