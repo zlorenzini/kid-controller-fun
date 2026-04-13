@@ -53,6 +53,15 @@
       padding: 0 2rem;
       line-height: 1.6;
     }
+    #status {
+      font-size: .9rem;
+      opacity: .78;
+      text-align: center;
+      padding: 0 1.4rem;
+      max-width: 92vw;
+      line-height: 1.4;
+      word-break: break-word;
+    }
     #overlay .icon { font-size: clamp(3rem, 10vw, 6rem); animation: bounce 1.2s infinite; }
     @keyframes bounce {
       0%,100% { transform: translateY(0); }
@@ -145,6 +154,7 @@
   <h1>Kid Controller Fun!</h1>
   <p>Plug in your <strong>Nintendo Switch Pro Controller</strong> via USB,<br/>
      then press any button to start the show!</p>
+  <p id="status">Waiting for gamepad...</p>
   <p style="font-size:.9rem; opacity:.55;">(Works best in Chrome / Edge on desktop)</p>
 </div>
 
@@ -176,6 +186,7 @@
 const canvas   = document.getElementById('c');
 const ctx      = canvas.getContext('2d');
 const overlay  = document.getElementById('overlay');
+const statusEl = document.getElementById('status');
 const fxLabel  = document.getElementById('fx-label');
 const lsDot    = document.getElementById('ls-dot');
 const rsDot    = document.getElementById('rs-dot');
@@ -297,6 +308,39 @@ let wandHue = 0;
 // ── Controller state ─────────────────────────────────────
 let connected    = false;
 let prevButtons  = new Array(18).fill(false);
+let lastStatus   = '';
+
+function setStatus(text) {
+  if (text === lastStatus) return;
+  lastStatus = text;
+  statusEl.textContent = text;
+}
+
+function scoreGamepad(g) {
+  if (!g) return -1;
+  const id = (g.id || '').toLowerCase();
+  let score = 0;
+  if (g.connected) score += 100;
+  if ((g.buttons || []).length) score += 30;
+  if ((g.axes || []).length) score += 20;
+  if (g.mapping === 'standard') score += 15;
+  if (/nintendo|switch|xbox|sony|dualshock|dualsense|gamepad/.test(id)) score += 10;
+  return score;
+}
+
+function getActiveGamepad() {
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads() || []) : [];
+  const livePads = pads.filter(Boolean).filter((g) => g.connected);
+  if (!livePads.length) return null;
+  livePads.sort((a, b) => scoreGamepad(b) - scoreGamepad(a));
+  return livePads[0] || null;
+}
+
+function readButtonPressed(button) {
+  if (typeof button === 'number') return button > 0.5;
+  if (!button) return false;
+  return Boolean(button.pressed || button.value > 0.5);
+}
 
 // ── Show effect label ────────────────────────────────────
 let fxTimeout = null;
@@ -384,15 +428,15 @@ function loop(ts) {
   lastTime = ts;
 
   // Read gamepad
-  const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-  let gp = null;
-  for (const g of gamepads) { if (g) { gp = g; break; } }
+  const gp = getActiveGamepad();
 
   if (gp) {
     if (!connected) {
       connected = true;
       overlay.classList.add('hidden');
     }
+    const id = gp.id ? gp.id.slice(0, 60) : 'Unknown gamepad';
+    setStatus(`Connected: ${id} (mapping: ${gp.mapping || 'unknown'})`);
 
     // Axes
     const lx = Math.abs(gp.axes[0]) > 0.12 ? gp.axes[0] : 0;
@@ -424,7 +468,7 @@ function loop(ts) {
 
     // Buttons
     for (let i = 0; i < Math.min(gp.buttons.length, BUTTONS.length); i++) {
-      const pressed = gp.buttons[i].pressed;
+      const pressed = readButtonPressed(gp.buttons[i]);
       if (pressed && !prevButtons[i]) onButtonDown(i);
       prevButtons[i] = pressed;
 
@@ -435,6 +479,9 @@ function loop(ts) {
     }
   } else {
     connected = false;
+    overlay.classList.remove('hidden');
+    setStatus('No controller detected. Click this tab, then press any controller button.');
+    prevButtons.fill(false);
   }
 
   // ── Draw background ──────────────────────────────────
@@ -542,6 +589,7 @@ window.addEventListener('gamepadconnected', (e) => {
   console.log('Gamepad connected:', e.gamepad.id);
   overlay.classList.add('hidden');
   connected = true;
+  setStatus(`Connected event: ${e.gamepad.id || 'Unknown gamepad'}`);
   // Initialise wand to centre
   wand.x = canvas.width  / 2;
   wand.y = canvas.height / 2;
@@ -549,12 +597,15 @@ window.addEventListener('gamepadconnected', (e) => {
 window.addEventListener('gamepaddisconnected', () => {
   connected = false;
   overlay.classList.remove('hidden');
+  setStatus('Controller disconnected. Reconnect USB and press any button.');
+  prevButtons.fill(false);
   pills.forEach(p => p.classList.remove('active'));
 });
 
 // Initialise wand position
 wand.x = canvas.width  / 2;
 wand.y = canvas.height / 2;
+setStatus('Waiting for gamepad... Connect USB controller and press any button.');
 
 requestAnimationFrame(loop);
 </script>
